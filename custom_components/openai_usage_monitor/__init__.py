@@ -1,5 +1,5 @@
 """The OpenAI Usage Monitor integration."""
-
+from .coordinator import OpenAIUsageMonitorCoordinator
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
@@ -19,7 +19,9 @@ async def async_setup_entry(
     entry: OpenAIUsageMonitorConfigEntry,
 ) -> bool:
     """Set up OpenAI Usage Monitor from a config entry."""
-    entry.runtime_data = {}
+    coordinator = OpenAIUsageMonitorCoordinator(hass, entry)
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
