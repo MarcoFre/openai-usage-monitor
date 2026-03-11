@@ -76,8 +76,9 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if response.status >= 400:
             body = await response.text()
-            raise UpdateFailed(f"API error {response.status}: {body}")
-
+            raise UpdateFailed(
+                f"API error {response.status} on {path} with params {params}: {body}"
+            )
         try:
             return await response.json()
         except ValueError as err:
@@ -198,7 +199,6 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "/organization/costs",
             {
                 "start_time": start_today_utc,
-                "end_time": end_time,
                 "bucket_width": "1d",
             },
         )
