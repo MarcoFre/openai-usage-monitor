@@ -37,7 +37,8 @@ Custom Home Assistant integration for monitoring OpenAI API usage and costs, inc
 8. Install it
 9. Restart Home Assistant
 
-Repository URL:
+Repository URL: ```text
+https://github.com/MarcoFre/openai-usage-monitor
 
 ### Option 2 — Manual installation
 
