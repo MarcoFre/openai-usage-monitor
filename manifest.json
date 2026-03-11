@@ -1,0 +1,12 @@
+{
+  "domain": "openai_usage_monitor",
+  "name": "OpenAI Usage Monitor",
+  "version": "0.1.0",
+  "documentation": "https://github.com/MarcoFre/openai-usage-monitor",
+  "issue_tracker": "https://github.com/MarcoFre/openai-usage-monitor/issues",
+  "codeowners": ["@MarcoFre"],
+  "config_flow": true,
+  "single_config_entry": true,
+  "integration_type": "service",
+  "iot_class": "cloud_polling"
+}
