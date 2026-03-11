@@ -1,233 +1,244 @@
-"""Sensor platform for OpenAI Usage Monitor."""
+"""Data coordinator for OpenAI Usage Monitor."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+from datetime import timedelta
+import logging
+from typing import Any
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorEntityDescription,
-    SensorStateClass,
-)
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
-
-@dataclass(frozen=True, kw_only=True)
-class OpenAIUsageMonitorSensorEntityDescription(SensorEntityDescription):
-    """Entity description for OpenAI Usage Monitor sensors."""
-
-    value_fn: Callable[[dict[str, Any]], Any]
-
-
-SENSOR_DESCRIPTIONS: tuple[OpenAIUsageMonitorSensorEntityDescription, ...] = (
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="cost_today",
-        name="Cost today",
-        icon="mdi:currency-usd",
-        device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=4,
-        value_fn=lambda data: data.get("cost_today", 0.0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="cost_today_utc",
-        name="Cost today UTC",
-        icon="mdi:currency-usd",
-        device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=4,
-        value_fn=lambda data: data.get("cost_today_utc", 0.0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="requests_24h",
-        name="Requests 24h",
-        icon="mdi:counter",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="req",
-        value_fn=lambda data: data.get("requests_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="requests_today_utc",
-        name="Requests today UTC",
-        icon="mdi:counter",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="req",
-        value_fn=lambda data: data.get("requests_today_utc", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="input_tokens_24h",
-        name="Input tokens 24h",
-        icon="mdi:arrow-down-bold-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("input_tokens_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="input_tokens_today_utc",
-        name="Input tokens today UTC",
-        icon="mdi:arrow-down-bold-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("input_tokens_today_utc", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="output_tokens_24h",
-        name="Output tokens 24h",
-        icon="mdi:arrow-up-bold-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("output_tokens_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="output_tokens_today_utc",
-        name="Output tokens today UTC",
-        icon="mdi:arrow-up-bold-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("output_tokens_today_utc", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="cached_tokens_24h",
-        name="Cached tokens 24h",
-        icon="mdi:database-arrow-down",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("cached_tokens_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="cached_tokens_today_utc",
-        name="Cached tokens today UTC",
-        icon="mdi:database-arrow-down",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("cached_tokens_today_utc", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="audio_input_tokens_24h",
-        name="Audio input tokens 24h",
-        icon="mdi:microphone-message",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("audio_input_tokens_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="audio_input_tokens_today_utc",
-        name="Audio input tokens today UTC",
-        icon="mdi:microphone-message",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("audio_input_tokens_today_utc", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="image_output_tokens_24h",
-        name="Image output tokens 24h",
-        icon="mdi:image-outline",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("image_output_tokens_24h", 0),
-    ),
-    OpenAIUsageMonitorSensorEntityDescription(
-        key="image_output_tokens_today_utc",
-        name="Image output tokens today UTC",
-        icon="mdi:image-outline",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="tok",
-        value_fn=lambda data: data.get("image_output_tokens_today_utc", 0),
-    ),
+from .const import (
+    API_BASE_URL,
+    CONF_API_KEY,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
 )
 
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
-) -> None:
-    """Set up OpenAI Usage Monitor sensors from a config entry."""
-    coordinator: OpenAIUsageMonitorCoordinator = entry.runtime_data
-
-    async_add_entities(
-        OpenAIUsageMonitorSensor(coordinator, entry, description)
-        for description in SENSOR_DESCRIPTIONS
-    )
+_LOGGER = logging.getLogger(__name__)
 
 
-class OpenAIUsageMonitorSensor(
-    CoordinatorEntity[OpenAIUsageMonitorCoordinator],
-    SensorEntity,
-):
-    """Representation of an OpenAI Usage Monitor sensor."""
+class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Coordinator to fetch OpenAI usage and cost data."""
 
-    entity_description: OpenAIUsageMonitorSensorEntityDescription
-    _attr_has_entity_name = True
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the coordinator."""
+        self.entry = entry
+        self._api_key: str = entry.data[CONF_API_KEY]
+        self._session = async_get_clientsession(hass)
 
-    def __init__(
-        self,
-        coordinator: OpenAIUsageMonitorCoordinator,
-        entry: ConfigEntry,
-        description: OpenAIUsageMonitorSensorEntityDescription,
-    ) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="OpenAI Usage Monitor",
-            manufacturer="OpenAI",
-            model="API Usage",
+        scan_minutes = int(
+            entry.options.get(
+                CONF_SCAN_INTERVAL,
+                int(DEFAULT_SCAN_INTERVAL.total_seconds() // 60),
+            )
         )
 
-    @property
-    def native_value(self) -> Any:
-        """Return the sensor value."""
-        return self.entity_description.value_fn(self.coordinator.data)
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=timedelta(minutes=scan_minutes),
+        )
 
-    @property
-    def native_unit_of_measurement(self) -> str | None:
-        """Return the native unit of measurement."""
-        if self.entity_description.key in {"cost_today", "cost_today_utc"}:
-            return self.coordinator.data.get("currency", "USD")
-        return self.entity_description.native_unit_of_measurement
+    async def _async_api_get(
+        self,
+        path: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Perform a GET request to the OpenAI API."""
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra state attributes."""
-        key = self.entity_description.key
+        url = f"{API_BASE_URL}{path}"
 
-        if key == "cost_today":
-            return {
-                "source": "OpenAI Admin API",
-                "period": "today_local",
-                "currency": self.coordinator.data.get("currency", "USD"),
-            }
+        try:
+            response = await self._session.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=20,
+            )
+        except ClientError as err:
+            raise UpdateFailed(f"Connection error: {err}") from err
 
-        if key == "cost_today_utc":
-            return {
-                "source": "OpenAI Admin API",
-                "period": "today_utc",
-                "currency": self.coordinator.data.get("currency", "USD"),
-            }
+        if response.status in (401, 403):
+            raise ConfigEntryAuthFailed(
+                "Invalid admin API key or insufficient permissions"
+            )
 
-        if key.endswith("_24h"):
-            return {
-                "source": "OpenAI Admin API",
-                "period": "last_24_hours",
-            }
+        if response.status >= 400:
+            body = await response.text()
+            raise UpdateFailed(f"API error {response.status}: {body}")
 
-        if key.endswith("_today_utc"):
-            return {
-                "source": "OpenAI Admin API",
-                "period": "today_utc",
-            }
+        try:
+            return await response.json()
+        except ValueError as err:
+            raise UpdateFailed("Invalid JSON returned by API") from err
+
+    async def _async_paginated_get(
+        self,
+        path: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fetch all pages from a paginated OpenAI endpoint."""
+        all_data: list[dict[str, Any]] = []
+        next_page: str | None = None
+
+        while True:
+            current_params = dict(params)
+            if next_page:
+                current_params["page"] = next_page
+
+            payload = await self._async_api_get(path, current_params)
+            all_data.extend(payload.get("data", []))
+
+            if not payload.get("has_more"):
+                break
+
+            next_page = payload.get("next_page")
+            if not next_page:
+                break
 
         return {
-            "source": "OpenAI Admin API",
+            "data": all_data,
+            "has_more": False,
+            "next_page": None,
+        }
+
+    @staticmethod
+    def _aggregate_usage(buckets: list[dict[str, Any]]) -> dict[str, int]:
+        """Aggregate usage metrics from OpenAI buckets."""
+        totals = {
+            "requests": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "audio_input_tokens": 0,
+            "image_output_tokens": 0,
+        }
+
+        for bucket in buckets:
+            for result in bucket.get("results", []):
+                totals["requests"] += int(result.get("num_model_requests", 0) or 0)
+                totals["input_tokens"] += int(result.get("input_tokens", 0) or 0)
+                totals["output_tokens"] += int(result.get("output_tokens", 0) or 0)
+                totals["cached_tokens"] += int(
+                    result.get("input_cached_tokens", 0) or 0
+                )
+                totals["audio_input_tokens"] += int(
+                    result.get("input_audio_tokens", 0) or 0
+                )
+                totals["image_output_tokens"] += int(
+                    result.get("output_image_tokens", 0) or 0
+                )
+
+        return totals
+
+    @staticmethod
+    def _aggregate_costs(buckets: list[dict[str, Any]]) -> dict[str, Any]:
+        """Aggregate cost metrics from OpenAI buckets."""
+        total = 0.0
+        currency = "USD"
+
+        for bucket in buckets:
+            for result in bucket.get("results", []):
+                amount = result.get("amount", {})
+                total += float(amount.get("value", 0) or 0)
+                if amount.get("currency"):
+                    currency = str(amount["currency"]).upper()
+
+        return {
+            "value": round(total, 4),
+            "currency": currency,
+        }
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Fetch data from OpenAI and aggregate metrics."""
+        now_local = dt_util.now()
+        now_utc = dt_util.utcnow()
+
+        end_time = int(now_utc.timestamp())
+        start_24h = int((now_utc - timedelta(hours=24)).timestamp())
+        start_today_local = int(
+            now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        )
+        start_today_utc = int(
+            now_utc.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        )
+
+        usage_24h_payload = await self._async_paginated_get(
+            "/organization/usage/completions",
+            {
+                "start_time": start_24h,
+                "end_time": end_time,
+                "bucket_width": "1h",
+                "limit": 168,
+            },
+        )
+
+        usage_today_utc_payload = await self._async_paginated_get(
+            "/organization/usage/completions",
+            {
+                "start_time": start_today_utc,
+                "end_time": end_time,
+                "bucket_width": "1h",
+                "limit": 168,
+            },
+        )
+
+        costs_today_local_payload = await self._async_paginated_get(
+            "/organization/costs",
+            {
+                "start_time": start_today_local,
+                "end_time": end_time,
+                "bucket_width": "1d",
+            },
+        )
+
+        costs_today_utc_payload = await self._async_paginated_get(
+            "/organization/costs",
+            {
+                "start_time": start_today_utc,
+                "end_time": end_time,
+                "bucket_width": "1d",
+            },
+        )
+
+        usage_24h = self._aggregate_usage(usage_24h_payload["data"])
+        usage_today_utc = self._aggregate_usage(usage_today_utc_payload["data"])
+        costs_today_local = self._aggregate_costs(costs_today_local_payload["data"])
+        costs_today_utc = self._aggregate_costs(costs_today_utc_payload["data"])
+
+        currency = costs_today_utc["currency"] or costs_today_local["currency"]
+
+        return {
+            "currency": currency,
+            "cost_today": costs_today_local["value"],
+            "cost_today_utc": costs_today_utc["value"],
+            "requests_24h": usage_24h["requests"],
+            "input_tokens_24h": usage_24h["input_tokens"],
+            "output_tokens_24h": usage_24h["output_tokens"],
+            "cached_tokens_24h": usage_24h["cached_tokens"],
+            "audio_input_tokens_24h": usage_24h["audio_input_tokens"],
+            "image_output_tokens_24h": usage_24h["image_output_tokens"],
+            "requests_today_utc": usage_today_utc["requests"],
+            "input_tokens_today_utc": usage_today_utc["input_tokens"],
+            "output_tokens_today_utc": usage_today_utc["output_tokens"],
+            "cached_tokens_today_utc": usage_today_utc["cached_tokens"],
+            "audio_input_tokens_today_utc": usage_today_utc["audio_input_tokens"],
+            "image_output_tokens_today_utc": usage_today_utc["image_output_tokens"],
+            "raw_usage_24h": usage_24h_payload["data"],
+            "raw_usage_today_utc": usage_today_utc_payload["data"],
+            "raw_costs_today_local": costs_today_local_payload["data"],
+            "raw_costs_today_utc": costs_today_utc_payload["data"],
         }
