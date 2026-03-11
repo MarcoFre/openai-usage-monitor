@@ -131,6 +131,25 @@ The integration provides two different views of your OpenAI usage:
 
 If you compare values against OpenAI CSV exports, use the **Today UTC** sensors.
 
+## Example dashboard
+
+You can use the integration sensors in a custom Lovelace dashboard to monitor:
+
+- daily cost
+- requests
+- input and output tokens
+- cached tokens
+- audio usage
+- image usage
+- rolling 24h values
+- Today UTC values
+
+Example:
+
+![OpenAI Usage Monitor Dashboard](docs/dashboard-example.png)
+
+> Save your dashboard screenshot in `docs/dashboard-example.png` to display it here.
+
 ## Notes
 
 - This integration is designed for OpenAI organization-level monitoring
