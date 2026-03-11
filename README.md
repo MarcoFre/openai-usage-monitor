@@ -148,8 +148,6 @@ Example:
 
 ![OpenAI Usage Monitor Dashboard](docs/dashboard-example.png)
 
-> Save your dashboard screenshot in `docs/dashboard-example.png` to display it here.
-
 ## Notes
 
 - This integration is designed for OpenAI organization-level monitoring
