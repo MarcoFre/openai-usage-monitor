@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
 from typing import Any
-
+from datetime import UTC, datetime, timedelta
 from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.util import dt as dt_util
 
 from .const import (
     API_BASE_URL,
@@ -164,18 +162,18 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from OpenAI and aggregate metrics."""
-        now_local = dt_util.now()
-        now_utc = dt_util.utcnow()
-
+        now_utc = datetime.now(UTC)
+    
         end_time = int(now_utc.timestamp())
         start_24h = int((now_utc - timedelta(hours=24)).timestamp())
-        start_today_local = int(
-            now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        )
         start_today_utc = int(
             now_utc.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         )
-
+    
+        # Safety guard: never allow an invalid range
+        if end_time <= start_today_utc:
+            end_time = start_today_utc + 60
+    
         usage_24h_payload = await self._async_paginated_get(
             "/organization/usage/completions",
             {
@@ -185,7 +183,7 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "limit": 168,
             },
         )
-
+    
         usage_today_utc_payload = await self._async_paginated_get(
             "/organization/usage/completions",
             {
@@ -195,16 +193,7 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "limit": 168,
             },
         )
-
-        costs_today_local_payload = await self._async_paginated_get(
-            "/organization/costs",
-            {
-                "start_time": start_today_local,
-                "end_time": end_time,
-                "bucket_width": "1d",
-            },
-        )
-
+    
         costs_today_utc_payload = await self._async_paginated_get(
             "/organization/costs",
             {
@@ -213,17 +202,17 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "bucket_width": "1d",
             },
         )
-
+    
         usage_24h = self._aggregate_usage(usage_24h_payload["data"])
         usage_today_utc = self._aggregate_usage(usage_today_utc_payload["data"])
-        costs_today_local = self._aggregate_costs(costs_today_local_payload["data"])
         costs_today_utc = self._aggregate_costs(costs_today_utc_payload["data"])
-
-        currency = costs_today_utc["currency"] or costs_today_local["currency"]
-
+    
+        currency = costs_today_utc["currency"]
+    
         return {
             "currency": currency,
-            "cost_today": costs_today_local["value"],
+            # keep old key for compatibility, but now it is UTC-based
+            "cost_today": costs_today_utc["value"],
             "cost_today_utc": costs_today_utc["value"],
             "requests_24h": usage_24h["requests"],
             "input_tokens_24h": usage_24h["input_tokens"],
@@ -239,6 +228,5 @@ class OpenAIUsageMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "image_output_tokens_today_utc": usage_today_utc["image_output_tokens"],
             "raw_usage_24h": usage_24h_payload["data"],
             "raw_usage_today_utc": usage_today_utc_payload["data"],
-            "raw_costs_today_local": costs_today_local_payload["data"],
             "raw_costs_today_utc": costs_today_utc_payload["data"],
         }
