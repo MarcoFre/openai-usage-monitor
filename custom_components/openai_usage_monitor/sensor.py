@@ -13,9 +13,9 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 from .coordinator import OpenAIUsageMonitorCoordinator
@@ -39,12 +39,29 @@ SENSOR_DESCRIPTIONS: tuple[OpenAIUsageMonitorSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("cost_today", 0.0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
+        key="cost_today_utc",
+        name="Cost today UTC",
+        icon="mdi:currency-usd",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda data: data.get("cost_today_utc", 0.0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
         key="requests_24h",
         name="Requests 24h",
         icon="mdi:counter",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="req",
         value_fn=lambda data: data.get("requests_24h", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
+        key="requests_today_utc",
+        name="Requests today UTC",
+        icon="mdi:counter",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="req",
+        value_fn=lambda data: data.get("requests_today_utc", 0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
         key="input_tokens_24h",
@@ -55,12 +72,28 @@ SENSOR_DESCRIPTIONS: tuple[OpenAIUsageMonitorSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("input_tokens_24h", 0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
+        key="input_tokens_today_utc",
+        name="Input tokens today UTC",
+        icon="mdi:arrow-down-bold-box",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="tok",
+        value_fn=lambda data: data.get("input_tokens_today_utc", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
         key="output_tokens_24h",
         name="Output tokens 24h",
         icon="mdi:arrow-up-bold-box",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="tok",
         value_fn=lambda data: data.get("output_tokens_24h", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
+        key="output_tokens_today_utc",
+        name="Output tokens today UTC",
+        icon="mdi:arrow-up-bold-box",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="tok",
+        value_fn=lambda data: data.get("output_tokens_today_utc", 0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
         key="cached_tokens_24h",
@@ -71,6 +104,14 @@ SENSOR_DESCRIPTIONS: tuple[OpenAIUsageMonitorSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("cached_tokens_24h", 0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
+        key="cached_tokens_today_utc",
+        name="Cached tokens today UTC",
+        icon="mdi:database-arrow-down",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="tok",
+        value_fn=lambda data: data.get("cached_tokens_today_utc", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
         key="audio_input_tokens_24h",
         name="Audio input tokens 24h",
         icon="mdi:microphone-message",
@@ -79,12 +120,28 @@ SENSOR_DESCRIPTIONS: tuple[OpenAIUsageMonitorSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("audio_input_tokens_24h", 0),
     ),
     OpenAIUsageMonitorSensorEntityDescription(
+        key="audio_input_tokens_today_utc",
+        name="Audio input tokens today UTC",
+        icon="mdi:microphone-message",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="tok",
+        value_fn=lambda data: data.get("audio_input_tokens_today_utc", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
         key="image_output_tokens_24h",
         name="Image output tokens 24h",
         icon="mdi:image-outline",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="tok",
         value_fn=lambda data: data.get("image_output_tokens_24h", 0),
+    ),
+    OpenAIUsageMonitorSensorEntityDescription(
+        key="image_output_tokens_today_utc",
+        name="Image output tokens today UTC",
+        icon="mdi:image-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="tok",
+        value_fn=lambda data: data.get("image_output_tokens_today_utc", 0),
     ),
 )
 
@@ -121,14 +178,12 @@ class OpenAIUsageMonitorSensor(
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="OpenAI Usage Monitor",
             manufacturer="OpenAI",
             model="API Usage",
-            entry_type=None,
         )
 
     @property
@@ -139,27 +194,39 @@ class OpenAIUsageMonitorSensor(
     @property
     def native_unit_of_measurement(self) -> str | None:
         """Return the native unit of measurement."""
-        if self.entity_description.key == "cost_today":
+        if self.entity_description.key in {"cost_today", "cost_today_utc"}:
             return self.coordinator.data.get("currency", "USD")
         return self.entity_description.native_unit_of_measurement
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes."""
-        if self.entity_description.key == "cost_today":
+        key = self.entity_description.key
+
+        if key == "cost_today":
             return {
                 "source": "OpenAI Admin API",
-                "period": "today",
+                "period": "today_local",
                 "currency": self.coordinator.data.get("currency", "USD"),
             }
 
-        if self.entity_description.key == "requests_24h":
+        if key == "cost_today_utc":
+            return {
+                "source": "OpenAI Admin API",
+                "period": "today_utc",
+                "currency": self.coordinator.data.get("currency", "USD"),
+            }
+
+        if key.endswith("_24h"):
             return {
                 "source": "OpenAI Admin API",
                 "period": "last_24_hours",
             }
 
-        return {
-            "source": "OpenAI Admin API",
-            "period": "last_24_hours",
-        }
+        if key.endswith("_today_utc"):
+            return {
+                "source": "OpenAI Admin API",
+                "period": "today_utc",
+            }
+
+        return {"source": "OpenAI Admin API"}
