@@ -1,0 +1,34 @@
+{
+  "title": "OpenAI Usage Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up OpenAI Usage Monitor",
+        "description": "Enter your OpenAI Admin API key and choose how often Home Assistant should refresh usage data.",
+        "data": {
+          "api_key": "Admin API key",
+          "scan_interval": "Update interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to OpenAI",
+      "invalid_auth": "Invalid API key or insufficient permissions",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "single_instance_allowed": "Only one OpenAI Usage Monitor instance is allowed"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "OpenAI Usage Monitor options",
+        "description": "Change how often Home Assistant refreshes usage data.",
+        "data": {
+          "scan_interval": "Update interval (minutes)"
+        }
+      }
+    }
+  }
+}
